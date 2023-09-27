@@ -1,48 +1,88 @@
 import cv2
-import pyautogui
 import mediapipe as mp
+import subprocess
 
-cap = cv2.VideoCapture(0)
+def find_hands(img, mode=False, max_hands=2, model_c=1, detection_con=0.5, track_con=0.5, draw=True):
+    mp_hands = mp.solutions.hands
+    mp_draw = mp.solutions.drawing_utils
 
-mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(static_image_mode=False, max_numhands=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    hands = mp_hands.Hands(mode, max_hands, model_c, detection_con, track_con)
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    result = hands.process(img_rgb)
 
-mp_drawing = mp.solutions.drawing_utils
+    if result.multi_hand_landmarks and draw:
+        for hand_land in result.multi_hand_landmarks:
+            mp_draw.draw_landmarks(img, hand_land, mp_hands.HAND_CONNECTIONS)
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
+    return img, result
 
-    image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+def find_position(img, result, hand_no=0, draw=True):
+    pos_list = []
+    if result.multi_hand_landmarks:
+        my_hand = result.multi_hand_landmarks[hand_no]
+        for id, lm in enumerate(my_hand.landmark):
+            h, w, c = img.shape
+            cx, cy = int(lm.x * w), int(lm.y * h)
+            pos_list.append([id, cx, cy])
 
-    results = hands.process(image_rgb)
+            if draw:
+                cv2.circle(img, (cx, cy), 10, (255, 255, 255), cv2.FILLED)
 
-    if results.multi_hand_landmarks:
-        for hand_landmarks in results.multi_hand_landmarks:
-            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+    return pos_list
 
-            index_finger_y = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].y
-            thumb_y = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP].y
+def change_volume(hand_direction):
 
-            if index_finger_y < thumb_y:
-                hand_gesture = 'pointing up'
-            elif index_finger_y > thumb_y:
-                hand_gesture = 'pointing down'
+    if hand_direction == "up":
+        subprocess.run(["osascript", "-e", "set volume output volume (output volume of (get volume settings) + 10)"])
+    elif hand_direction == "down":
+        subprocess.run(["osascript", "-e", "set volume output volume (output volume of (get volume settings) - 10)"])
+
+def draw_volume_bar(img, volume):
+    bar_width = 400
+    bar_height = 20
+    bar_x = int((img.shape[1] - bar_width) / 2)
+    bar_y = 50
+
+    cv2.rectangle(img, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (0, 0, 0), 2)
+    filled_width = int(volume / 100 * bar_width)
+    cv2.rectangle(img, (bar_x, bar_y), (bar_x + filled_width, bar_y + bar_height), (0, 255, 0), cv2.FILLED)
+    cv2.putText(img, f"Volume: {volume}", (bar_x, bar_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+def main():
+    cap = cv2.VideoCapture(0)
+    width = 700
+    height = 350
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+    while True:
+        success, img = cap.read()
+        img, result = find_hands(img)
+        pos_list = find_position(img, result)
+
+        if len(pos_list) != 0:
+
+            tip_x, tip_y = pos_list[4][1], pos_list[4][2]
+
+            wrist_x, wrist_y = pos_list[0][1], pos_list[0][2]
+
+            if tip_y < wrist_y:
+                change_volume("up")
             else:
-                hand_gesture = 'other'
-            
-            if hand_gesture == 'pointing up':
-                pyautogui.press('volume up')
-            elif hand_gesture == 'pointing down':
-                pyautogui.press('volume down')
-            if hand_gesture == 'pointing up':
-                pyautogui.press('volume up')
+                change_volume("down")
 
-            cv2.imshow('Hand Gesture', frame)
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+        output = subprocess.run(["osascript", "-e", "output volume of (get volume settings)"], capture_output=True, text=True)
+        volume = int(output.stdout.strip())
+
+        draw_volume_bar(img, volume)
+
+        cv2.imshow("Webcam", img)
+        if cv2.waitKey(1) == ord('q'):
+            break
 
     cap.release()
     cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
